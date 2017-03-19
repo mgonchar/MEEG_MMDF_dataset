@@ -1,13 +1,31 @@
-function eval_MSMM(run_preproc, use_empty_room)
+function eval_MSMM(run_preproc, use_empty_room, use_nbh_smthng, reduce_spatial, reduce_temporal)
 
 clc;
+%% set defaults
 
+% preprocessing
 if nargin < 1
     run_preproc = true;
 end
 
+% use emty room record to construct noise covariance estimation
 if nargin < 2
     use_empty_room = true;
+end
+
+% use smoothed around neighbours weighted prior (spatial smoothing)
+if nargin < 3
+    use_nbh_smthng = true;
+end
+
+% use SVD to reduce spatial redundancy
+if nargin < 4
+    reduce_spatial = true;
+end
+
+% use SVD to reduce temporal redundancy
+if nargin < 5
+    reduce_temporal = true;
 end
 
 %% define globals
@@ -212,7 +230,7 @@ srcSurfFile = strcat(dirBS_db,'anat/@default_subject/tess_cortex_pial_low.mat');
 % step 4: get PCA of extended data
 % step 5: apply PCA from step 4 to original data (independently for each
 %         set)
-    
+
 for s = 1:n_subjects
     
     % load brainstorm mesh
@@ -254,24 +272,34 @@ for s = 1:n_subjects
     Lp{s} = Lp{s}*Wmat;
     [N_chan, N_vert] = size(Lp{s});
     
-    % eliminate low SNR spatial modes (reduce sensor space)
-    [~,S,~] = svd(cov(Lp{s}')); % step 1
-    Lp_norm{s} = Lp{s} / S(1);  % step 2
+    if reduce_spatial
+        % eliminate low SNR spatial modes (reduce sensor space)
+        [~,S,~] = svd(cov(Lp{s}')); % step 1
+        Lp_norm{s} = Lp{s} / S(1);  % step 2
+    end
 end
 
 clear Wmat S sb;
 
-tmp = zeros(N_chan, n_subjects*N_vert);
-for s = 1:n_subjects
-    before = (s-1)*N_vert;
-    tmp(:, before + 1 : before + N_vert) = Lp_norm{s}; % step 3
+if reduce_spatial
+    tmp = zeros(N_chan, n_subjects*N_vert);
+    for s = 1:n_subjects
+        before = (s-1)*N_vert;
+        tmp(:, before + 1 : before + N_vert) = Lp_norm{s}; % step 3
+    end
+
+    [coeff,~,~,~,explained,~] = pca(tmp'); % step 4
+    N_spat = find(cumsum(explained) > 99.9, 1, 'first');
+
+    U = coeff(:,1:N_spat); % spatial projector
+
+    clear tmp Lp_norm coeff explained;
+else
+    % skip spatial reduction
+    N_spat = N_chan;
+    U = speye(N_spat);
+    clear Lp_norm;
 end
-
-[coeff,~,~,~,explained,~] = pca(tmp'); % step 4
-N_spat = find(cumsum(explained) > 99.9, 1, 'first');
-
-U = coeff(:,1:N_spat); % spatial projector
-clear tmp Lp_norm coeff explained;
 
 % now get to step 5 and prepare data for temporal projection
 
@@ -291,8 +319,11 @@ for s = 1:n_subjects
     % apply MFA to reduce temporal redundancy
     for j = 1:D.nconditions
         Y{s,j}  = U'*D(Ic_spm,:,j);  % project out low SNR spatial modes
-        [~,S,~] = svd(cov(Y{s,j}));  % step 1
-        Y_norm{s,j} = Y{s,j} / S(1); % step 2
+
+        if reduce_temporal
+            [~,S,~] = svd(cov(Y{s,j}));  % step 1
+            Y_norm{s,j} = Y{s,j} / S(1); % step 2
+        end
     end
     
     % prepare block diagonal noise covariance matrix
@@ -331,22 +362,27 @@ end
 
 clear S Lp;
 
-tmp = zeros(D.nconditions*n_subjects*N_spat, size(Y_norm{1,1},2));
+if reduce_temporal
 
-for s = 1:n_subjects
-    for j = 1:D.nconditions
-        before = (s-1)*D.nconditions * N_spat  + (j-1)*N_spat;
-        tmp(before + 1 : before + N_spat, :) = Y_norm{s,j}; % step 3
+    tmp = zeros(D.nconditions*n_subjects*N_spat, size(Y_norm{1,1},2));
+
+    for s = 1:n_subjects
+        for j = 1:D.nconditions
+            before = (s-1)*D.nconditions * N_spat  + (j-1)*N_spat;
+            tmp(before + 1 : before + N_spat, :) = Y_norm{s,j}; % step 3
+        end
     end
+
+    [coeff,~,~,~,explained,~] = pca(tmp); % step 4
+    N_temp = find(cumsum(explained) > 99.9, 1, 'first');
+
+    T = coeff(:,1:N_temp); % temporal projector
+
+    clear tmp coeff explained Y_norm;
+else
+    N_temp = size(Y{1,1}, 2);
+    T = speye(N_temp);
 end
-
-[coeff,~,~,~,explained,~] = pca(tmp); % step 4
-N_temp = find(cumsum(explained) > 99.9, 1, 'first');
-
-T = coeff(:,1:N_temp); % temporal projector
-% N_temp_orig = size(T,1);
-
-clear tmp coeff explained Y_norm;
 
 % create a long-data array of Y as column vector of individual measurement,
 % with common temporal projector T to reduce temporal redundancy, i.e:
@@ -363,39 +399,40 @@ for s = 1:n_subjects
 end
 clear Y;
 
-% make smoothing kernel
-load(srcSurfFile);
+if use_nbh_smthng
+    % make smoothing kernel
+    load(srcSurfFile);
 
-% contingency matrix
-Cm = spm_mesh_distmtx(struct('vertices',Vertices,'faces',Faces),0);
-% smoothing weights across subjects' neighbours
-y = [1 0.8 0.37 0.2];
+    % contingency matrix
+    Cm = spm_mesh_distmtx(struct('vertices',Vertices,'faces',Faces),0);
+    % smoothing weights across subjects' neighbours
+    y = [1 0.8 0.37 0.2];
 
-iter_idx = 2:3;
-AA  = cell(max(iter_idx)+1, 1);
+    iter_idx = 2:3;
+    AA  = cell(max(iter_idx)+1, 1);
 
-% find subsets of certain distance
-AA{1} = eye(N_vert);
-AA{2} = full(Cm);
-B = AA{1} + AA{2};
-for i = iter_idx
-    Bn = zeros(N_vert);
-    Bn(Cm^i ~= 0) = 1;
-    AA{i+1} = full(Bn - B);
-    B = Bn;
+    % find subsets of certain distance
+    AA{1} = eye(N_vert);
+    AA{2} = full(Cm);
+    B = AA{1} + AA{2};
+    for i = iter_idx
+        Bn = zeros(N_vert);
+        Bn(Cm^i ~= 0) = 1;
+        AA{i+1} = full(Bn - B);
+        B = Bn;
+    end
+    clear B Bn Cm;
+
+    QG = zeros(N_vert);
+    for i = 1:max(iter_idx)+1
+        QG = QG + AA{i}*y(i);
+    end
+    K = sparse(QG(:,:));
+
+    clear AA y QG iter_idx;
+else
+    K = speye(N_vert);
 end
-clear B Bn Cm;
-
-QG = zeros(N_vert);
-for i = 1:max(iter_idx)+1
-    QG = QG + AA{i}*y(i);
-end
-K = sparse(QG(:,:));
-
-clear AA y QG iter_idx;
-
-% use calculate_distance_file code
-%load('distance5002.mat');
 
 Vs = speye(n_subjects*N_vert); % Initialization of ROI vertices matrix
 
@@ -405,10 +442,13 @@ psQ2 = kron(speye(n_subjects), K);
 % psQ2 = kron(speye(Nl),speye(Nd));
 
 %% Per-condition inverse (GALA)
+%
+%J_gala_percond = cell(n_subjects, D.nconditions);
+%
 %for j = 1:D.nconditions
 %    before = (j-1)*N_spat;
 %    UY_c = UY(before + 1 : before + N_spat, :);
-%    YY = cov(UY_c');%UY*UY';
+%    YY = (N_temp-1)*cov(UY_c');%UY*UY';
 % 
 %    % first ROI covariance matrix - strong correlation between subjects
 %    sQ1 = Vs*psQ1*Vs;
@@ -421,16 +461,19 @@ psQ2 = kron(speye(n_subjects), K);
 %    Qs = {Q1 Q2}; clear Q1 Q2;
 %
 %    % noise covariance component
-%    Qn{1} = Qe; % it's the first one for channel noise
+%    Qn = {Qe}; % it's the first one for channel noise
 % 
-%    [Cy,h,Ph,F] = spm_reml_sc(YY,[],[Qn Qs],1,-4,16);
+%    [Cy,h,Ph,F] = spm_reml_sc(YY,[],[Qn Qs],N_temp);%,-4,16);
 % 
-%    DD = h(end-1)*sQ1 + h(end)*sQ2;
+%    DD = h(end-1)*sQ1 + h(end)*sQ2; clear sQ1 sQ2;
 % 
-%    Cy = full(Cy);    
+%    %Cy = full(Cy);
 %    M = DD*UL'/Cy;
 % 
-%    J = M*UY_c * T';   
+%    J = M*UY_c * T';
+%    for s = 1:n_subjects
+%        J_gala_percond{s,j} = J((s-1)*N_vert + 1 : s*N_vert, (j-1)*N_temp + 1 : j*N_temp) * T';
+%    end
 %end
 
 %% All condition inverse (GALA)
@@ -512,4 +555,3 @@ if exist('tmp_090707_raw_st_cov.mat', 'file')
     delete('tmp_090707_raw_st_cov.mat');
 end
 end
-
