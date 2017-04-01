@@ -42,6 +42,10 @@ function slider_callback(hObj,eventdata)
 
 	set(ptch,'FaceVertexCData', J(:,time));
     set(bl3, 'String', ['Time (', num2str(time),')']);
+
+    %mn = min(min(J(:,time)));
+	%mx = max(max(J(:,time)));
+    %caxis([mn mx]);
 end
 
 end

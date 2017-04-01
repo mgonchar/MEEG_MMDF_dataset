@@ -1,4 +1,4 @@
-function eval_MSMM(run_preproc, use_empty_room, use_nbh_smthng, reduce_spatial, reduce_temporal)
+function [J_gala, J_mne, J_gala_percond] = eval_MSMM(run_preproc, use_empty_room, use_nbh_smthng, reduce_spatial, reduce_temporal)
 
 clc;
 %% set defaults
@@ -33,23 +33,23 @@ end
 subjects = {
     'sub001';
     'sub002';
-    %'sub003';
-    %'sub004';
-    %'sub005';
-    %'sub006';
-    %'sub007';
-    %'sub008';
-    %'sub009';
-    %'sub010';
-    %'sub011';
-    %'sub012';
-    %'sub013';
-    %'sub014';
-    %'sub015';
-    %'sub016';
-    %'sub017';
-    %'sub018';
-    %'sub019'
+    'sub003';
+    'sub004';
+    'sub005';
+    'sub006';
+    'sub007';
+    'sub008';
+    'sub009';
+    'sub010';
+    'sub011';
+    'sub012';
+    'sub013';
+    'sub014';
+    'sub015';
+    'sub016';
+    'sub017';
+    'sub018';
+    'sub019'
 };
 
 n_subjects = length(subjects);
@@ -442,50 +442,48 @@ psQ2 = kron(speye(n_subjects), K);
 % psQ2 = kron(speye(Nl),speye(Nd));
 
 %% Per-condition inverse (GALA)
-%
-%J_gala_percond = cell(n_subjects, D.nconditions);
-%
-%for j = 1:D.nconditions
-%    before = (j-1)*N_spat;
-%    UY_c = UY(before + 1 : before + N_spat, :);
-%    YY = (N_temp-1)*cov(UY_c');%UY*UY';
-% 
-%    % first ROI covariance matrix - strong correlation between subjects
-%    sQ1 = Vs*psQ1*Vs;
-%    Q1 = full(UL*sQ1*UL');
-% 
-%    % second ROI covariance matrix - subjects specific activity
-%    sQ2 = Vs*psQ2*Vs;
-%    Q2 = full(UL*sQ2*UL');
-% 
-%    Qs = {Q1 Q2}; clear Q1 Q2;
-%
-%    % noise covariance component
-%    Qn = {Qe}; % it's the first one for channel noise
-% 
-%    [Cy,h,Ph,F] = spm_reml_sc(YY,[],[Qn Qs],N_temp);%,-4,16);
-% 
-%    DD = h(end-1)*sQ1 + h(end)*sQ2; clear sQ1 sQ2;
-% 
-%    %Cy = full(Cy);
-%    M = DD*UL'/Cy;
-% 
-%    J = M*UY_c * T';
-%    for s = 1:n_subjects
-%        J_gala_percond{s,j} = J((s-1)*N_vert + 1 : s*N_vert, (j-1)*N_temp + 1 : j*N_temp) * T';
-%    end
-%end
+
+J_gala_percond = cell(n_subjects, D.nconditions);
+
+for j = 1:D.nconditions
+   UY_c = UY(:, (j-1)*N_temp + 1 : j*N_temp);
+   YY = (N_temp-1)*cov(UY_c');
+
+   % first ROI covariance matrix - strong correlation between subjects
+   sQ1 = Vs*psQ1*Vs;
+   Q1 = UL*sQ1*UL';
+
+   % second ROI covariance matrix - subjects specific activity
+   sQ2 = Vs*psQ2*Vs;
+   Q2 = UL*sQ2*UL';
+
+   Qs = {Q1 Q2}; clear Q1 Q2;
+
+   % noise covariance component
+   Qn = {Qe}; % it's the first one for channel noise
+
+   [Cy_gala_pc,h_gala_pc,Ph_gala_pc,F_gala_pc] = spm_reml_sc(YY,[],[Qn Qs],N_temp,-4,16);
+
+   DD = h_gala_pc(end-1)*sQ1 + h_gala_pc(end)*sQ2; clear sQ1 sQ2;
+
+   M = DD*UL'/Cy_gala_pc;
+
+   J = M*UY_c;
+   for s = 1:n_subjects
+       J_gala_percond{s,j} = J((s-1)*N_vert + 1 : s*N_vert, :) * T';
+   end
+end
 
 %% All condition inverse (GALA)
     YY = (D.nconditions*N_temp-1)*cov(UY');
 
     % first ROI covariance matrix - strong correlation between subjects
     sQ1 = Vs*psQ1*Vs;
-    Q1 = full(UL*sQ1*UL');
+    Q1 = UL*sQ1*UL';
 
     % second ROI covariance matrix - subjects specific activity
     sQ2 = Vs*psQ2*Vs;
-    Q2 = full(UL*sQ2*UL');
+    Q2 = UL*sQ2*UL';
 
     Qs = {Q1 Q2}; clear Q1 Q2;
     
@@ -493,12 +491,12 @@ psQ2 = kron(speye(n_subjects), K);
     Qn = {Qe}; % it's the first one for channel noise
 
     %[Cy,h,Ph,F] = spm_reml_sc(YY,[],[Qn Qs],1,-4,16);
-    [Cy,h,Ph,F] = spm_reml_sc(YY, [], [Qn Qs], D.nconditions*N_temp);%,-4,16);
+    [Cy_gala,h_gala,Ph_gala,F_gala] = spm_reml_sc(YY, [], [Qn Qs], D.nconditions*N_temp,-4,16);
 
-    DD = h(end-1)*sQ1 + h(end)*sQ2; clear sQ1 sQ2;
+    DD = h_gala(end-1)*sQ1 + h_gala(end)*sQ2; clear sQ1 sQ2;
 
     %Cy = full(Cy);    
-    M = DD*UL'/Cy;
+    M = DD*UL'/Cy_gala;
 
     J = M*UY;  
     
@@ -511,7 +509,7 @@ psQ2 = kron(speye(n_subjects), K);
     
 %% MNE
 
-    YY = (D.nconditions*N_temp-1)*cov(UY');
+%     YY = (D.nconditions*N_temp-1)*cov(UY');
 
 %     % first ROI covariance matrix - strong correlation between subjects
 %     sQ1 = Vs*psQ1*Vs;
@@ -527,14 +525,14 @@ psQ2 = kron(speye(n_subjects), K);
 %     Qn = {Qe}; % it's the first one for channel noise
 
     %[Cy,h,Ph,F] = spm_reml_sc(YY,[],[Qn Qs],1,-4,16);
-    [Cy,h,Ph,F] = spm_reml_sc(YY,[],{UL*UL'},D.nconditions*N_temp);%,-4,16);
+    [Cy_mne,h_mne,Ph_mne,F_mne] = spm_reml_sc(YY,[],{UL*UL'},D.nconditions*N_temp,-4,16);
 
     %DD = h(end-1)*sQ1 + h(end)*sQ2; clear sQ1 sQ2;
     %DD = h(end)*speye(n_subjects*N_vert);
 
     %Cy = full(Cy);    
     %M = DD*UL'/Cy;
-    M = h(end)*UL'/Cy;
+    M = h_mne(end)*UL'/Cy_mne;
 
     J = M*UY;  
     
