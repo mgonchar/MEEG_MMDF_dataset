@@ -1,4 +1,4 @@
-function [J_gala, J_mne, J_gala_percond] = eval_MSMM(run_preproc, use_empty_room, use_nbh_smthng, reduce_spatial, reduce_temporal)
+function [J_gala, J_mne, J_gala_percond] = eval_MSMM(run_preproc, run_default_inverse, use_empty_room, use_nbh_smthng, reduce_spatial, reduce_temporal)
 
 clc;
 %% set defaults
@@ -8,23 +8,28 @@ if nargin < 1
     run_preproc = true;
 end
 
-% use emty room record to construct noise covariance estimation
+% SPM inverse
 if nargin < 2
+    run_default_inverse = run_preproc;
+end
+
+% use emty room record to construct noise covariance estimation
+if nargin < 3
     use_empty_room = true;
 end
 
 % use smoothed around neighbours weighted prior (spatial smoothing)
-if nargin < 3
+if nargin < 4
     use_nbh_smthng = true;
 end
 
 % use SVD to reduce spatial redundancy
-if nargin < 4
+if nargin < 5
     reduce_spatial = true;
 end
 
 % use SVD to reduce temporal redundancy
-if nargin < 5
+if nargin < 6
     reduce_temporal = true;
 end
 
@@ -53,6 +58,9 @@ subjects = {
 };
 
 n_subjects = length(subjects);
+
+old_subjects = subjects([6 2 3 4 11 7 8 9 10 12 13 14 15 17 18 19]);
+n_old_subjects = length(old_subjects);
 
 % channel to extract trials
 stimulus_channel = 'STI101';
@@ -191,7 +199,7 @@ if run_preproc
         inputs{2} = cellstr(spm_select('FPList',fullfile(outpth,subjects{s}),'^bdspmeeg.*\.mat$'));  % (For deletion)  
         spm_jobman('serial', jobfile, '', inputs{:});
 
-        %% or ERP/ERF: crop to -100 to +800, detect artifacts (blinks) by thresholding EOG, average over trials and create contrasts of conditions
+        %% For ERP/ERF: crop to -100 to +800, detect artifacts (blinks) by thresholding EOG, average over trials and create contrasts of conditions
         jobfile = {fullfile(scrpth,'batch_preproc_meeg_erp_job.m')};
         inputs  = cell(1);
         inputs{1} = cellstr(spm_select('FPList',fullfile(outpth,subjects{s}),'^Mcbdspmeeg.*\.mat$'));
@@ -199,6 +207,67 @@ if run_preproc
 
         % return back to script folder
         cd(currFolder);
+    end
+end
+
+%% original SPM inverse (Group)
+
+if run_default_inverse
+
+    % Source analysis (create forward model)
+    jobfile = {fullfile(scrpth,'batch_localise_forward_model_meeg_job.m')};
+
+    for s = 1:n_old_subjects
+        if ~exist(fullfile(dir_dataset,old_subjects{s},'T1','mprage_EEG_BEM.mat'), 'file')
+            inputs  = cell(5,1);
+            inputs{1} = cellstr(spm_select('FPList',fullfile(outpth,old_subjects{s}),'^apMcbdspmeeg.*\.mat$'));
+            inputs{2} = cellstr(spm_select('FPList',fullfile(dir_dataset,old_subjects{s},'T1'),'mprage.nii'));
+            f = load(spm_select('FPList',fullfile(dir_dataset,old_subjects{s},'T1'),'^mri_fids.*\.mat$'));
+            inputs{3} = f.mri_fids(1,:);
+            inputs{4} = f.mri_fids(2,:);
+            inputs{5} = f.mri_fids(3,:);
+            spm_jobman('serial', jobfile, '', inputs{:});
+        end
+    end
+
+    % Do group inverse
+    f = dir(fullfile(outpth,old_subjects{1}));
+    f = regexpi({f.name},'^apMcbdspmeeg_run_01_sss_\d*\S*.gii$','match');
+    f = [f{:}];
+
+    if isempty(f)
+        jobfile = {fullfile(scrpth,'batch_localise_evoked_job.m')};
+        tmp = cell(n_old_subjects,1);
+        for s = 1:n_old_subjects
+            tmp{s} = spm_select('FPList',fullfile(outpth,old_subjects{s}),'^apMcbdspmeeg.*\.mat$');
+        end
+        inputs = cell(4,1);
+        inputs{1} = cellstr(strvcat(tmp{:}));
+        inputs{2} = {''};  % No fMRI priors
+        inputs{3} = cellstr(strvcat(tmp{:}));
+        inputs{4} = {''};  % No fMRI priors
+        spm_jobman('serial', jobfile, '', inputs{:});
+    end
+
+    % Group stats of group inversions of IID and GS 
+
+    srcstatsdir{1} = fullfile(outpth,'MEEG','GrpMSPStats');
+    srcstatsdir{2} = fullfile(outpth,'MEEG','GrpMMNStats');
+
+    jobfile = {fullfile(scrpth,'batch_stats_rmANOVA_job.m')};
+
+    for val = 1:length(srcstatsdir)
+        if ~exist(srcstatsdir{val})
+            eval(sprintf('!mkdir %s',srcstatsdir{val}));
+        end
+
+        inputs  = cell(n_old_subjects+1, 1);    
+        inputs{1} = {srcstatsdir{val}};    
+        for s = 1:n_old_subjects
+             inputs{s+1,1} = cellstr(strvcat(spm_select('FPList',fullfile(outpth,old_subjects{s}),sprintf('^apMcbdspmeeg_run_01_sss_%d.*\\.gii$',val))));   % Contrasts 1-3 assumed to be Famous, Unfamiliar, Scrambled
+        end
+
+        spm_jobman('serial', jobfile, '', inputs{:});
     end
 end
 
