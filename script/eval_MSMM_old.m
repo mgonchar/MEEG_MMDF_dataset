@@ -1,4 +1,4 @@
-function [J_gala, J_mne, J_gala_percond] = eval_MSMM(run_preproc, run_default_inverse, use_empty_room, use_nbh_smthng, reduce_spatial, reduce_temporal)
+function [J_gala, J_mne, J_gala_percond] = eval_MSMM_old(run_preproc, run_default_inverse, use_empty_room, use_nbh_smthng, reduce_spatial, reduce_temporal)
 
 clc;
 %% set defaults
@@ -36,31 +36,25 @@ end
 %% define globals
 
 subjects = {
-    'sub001';
-    'sub002';
-    'sub003';
-    'sub004';
-    'sub005';
-    'sub006';
-    'sub007';
-    'sub008';
-    'sub009';
-    'sub010';
-    'sub011';
-    'sub012';
-    'sub013';
-    'sub014';
-    'sub015';
-    'sub016';
-    'sub017';
-    'sub018';
-    'sub019'
+    'Sub01';
+    'Sub02';
+    'Sub03';
+    'Sub04';
+    'Sub05';
+    'Sub06';
+    'Sub07';
+    'Sub08';
+    'Sub09';
+    'Sub10';
+    'Sub11';
+    'Sub12';
+    'Sub13';
+    'Sub14';
+    'Sub15';
+    'Sub16';
 };
 
 n_subjects = length(subjects);
-
-old_subjects = subjects([6 2 3 4 11 7 8 9 10 12 13 14 15 17 18 19]);
-n_old_subjects = length(old_subjects);
 
 % channel to extract trials
 stimulus_channel = 'STI101';
@@ -85,18 +79,18 @@ event_type_mask = containers.Map(event_codes, {'Famous', 'Famous', 'Famous', 'Un
 dirBS_db = 'D:/science/Brain/MSMM/dataset/brainstorm_db/Protocol01/';
 
 % path to unzipped dataset
-dir_dataset = 'D:/science/Brain/MSMM/dataset/ds117';
+dir_dataset = 'D:/science/Brain/MSMM/dataset_old';
 dir_metha   = 'D:/science/Brain/MSMM/dataset/ds117_R0.1.1_metadata';
 
 % path to output
-outpth = 'D:/science/Brain/MSMM/output';
+outpth = 'D:/science/Brain/MSMM/output_old_parall';
 
 % path to SPM scripts
 scrpth = 'D:/science/Brain/MSMM/script';
 
 % empty room records mapping
-all_sbj = {'sub001'; 'sub002'; 'sub003'; 'sub004'; 'sub005'; 'sub006'; 'sub007'; 'sub008'; 'sub009'; 'sub010'; 'sub011'; 'sub012'; 'sub013'; 'sub014'; 'sub015'; 'sub016'; 'sub017'; 'sub018'; 'sub019'};
-recs    = [repmat({'090430_raw_st.fif'},1,16), repmat({'090707_raw_st.fif'},1,3)];
+all_sbj = {'sub001'; 'sub002'; 'sub003'; 'sub004'; 'sub005'; 'sub006'; 'sub007'; 'sub008'; 'sub009'; 'sub010'; 'sub011'; 'sub012'; 'sub013'; 'sub014'; 'sub015'; 'sub016';};
+recs    = repmat({'090430_raw_st.fif'},1,16);
 empty_room_mask = containers.Map(all_sbj,recs);
 
 %% create folders structure if required
@@ -118,75 +112,77 @@ spm('defaults', 'EEG');
 
 %% preprocess the data
 if run_preproc
-    for s = 1:n_subjects
+    parpool(4);
+    
+    parfor s = 1:n_subjects
         %% Convert & epoch, prepare, downsample, baseline-correct each run
 
         % get number of runs from file structure
-        MEG_path = [dir_dataset,'/',subjects{s},'/MEG/'];
+        MEG_path = [dir_dataset,'/',subjects{s},'/MEEG/'];
         f = dir(MEG_path);
         f = regexpi({f.name},'run_\d+_sss.fif','match');
         f = [f{:}];
         nrun = length(f);
-        clear f;
+        %clear f;
 
         jobfile = {fullfile(scrpth,'batch_preproc_meeg_convert_job.m')};
         jobs    = repmat(jobfile, 1, nrun);
         n = 1;
         inputs  = cell(nrun*3, 1);
         for r = 1:nrun
-            %% get bad channels from logfile, if not done yet
-            if ~exist([MEG_path,sprintf('run_%02d_bdch.mat',r)], 'file')
-    %            bad_channels = [];
-    %            
-    %            fid = fopen([MEG_path,sprintf('run_%02d_sss_log.txt',r)]);
-    %            tline = fgets(fid);
-    %            
-    %            % grep a string pattern
-    %            if ~isempty(strfind(tline, 'Static bad channels'))
-    %                tmp = strsplit(tline, ':');
-    %                bad_channels = union(bad_channels, sscanf(tmp{2}, '%d'));
-    %            end
-    %            flose(fid);
-    %            clear fid tline tmp;
-
-                label = {};  
-                save([MEG_path,sprintf('run_%02d_bdch.mat',r)], 'label');
-            end
-
-            %% Get events from events channel, if not done yet
-            if ~exist([MEG_path,sprintf('run_%02d_trldf.mat',r)], 'file')
-                raw = fiff_setup_read_raw([MEG_path,sprintf('run_%02d_sss.fif',r)]);
-
-                picks = fiff_pick_types(raw.info,false,false,false,{stimulus_channel},raw.info.bads);
-
-                [ data, ~ ] = fiff_read_raw_segment(raw,raw.first_samp,raw.last_samp,picks);
-
-                is_event = zeros(size(data));
-                for code = event_codes
-                    is_event = is_event | data == code;
-                end
-
-                exctracted_events     = data(is_event);
-                exctracted_events_idx = find(is_event);
-                final_events      = exctracted_events_idx(1);
-                conditionlabels   = {event_type_mask(data(exctracted_events_idx(1)))};
-
-                for i = 1:length(exctracted_events)-1
-                    if exctracted_events(i) ~= exctracted_events(i+1) || exctracted_events(i) == exctracted_events(i+1) && exctracted_events_idx(i+1) - exctracted_events_idx(i) > 1
-                        final_events(end+1)    = exctracted_events_idx(i+1);
-                        conditionlabels(end+1) = {event_type_mask(data(exctracted_events_idx(i+1)))};
-                    end
-                end
-                trl = [(final_events' - onset*HzToMs_ratio) (final_events' + offset*HzToMs_ratio) repmat(prestimlulus_baseline, length(final_events), 1)];
-                save([MEG_path,sprintf('run_%02d_trldf.mat',r)], 'trl', 'conditionlabels');
-
-                clear raw picks data;
-            end
+%             %% get bad channels from logfile, if not done yet
+%             if ~exist([MEG_path,sprintf('run_%02d_bdch.mat',r)], 'file')
+%     %            bad_channels = [];
+%     %            
+%     %            fid = fopen([MEG_path,sprintf('run_%02d_sss_log.txt',r)]);
+%     %            tline = fgets(fid);
+%     %            
+%     %            % grep a string pattern
+%     %            if ~isempty(strfind(tline, 'Static bad channels'))
+%     %                tmp = strsplit(tline, ':');
+%     %                bad_channels = union(bad_channels, sscanf(tmp{2}, '%d'));
+%     %            end
+%     %            flose(fid);
+%     %            clear fid tline tmp;
+% 
+%                 label = {};  
+%                 save([MEG_path,sprintf('run_%02d_bdch.mat',r)], 'label');
+%             end
+% 
+%             %% Get events from events channel, if not done yet
+%             if ~exist([MEG_path,sprintf('run_%02d_trldf.mat',r)], 'file')
+%                 raw = fiff_setup_read_raw([MEG_path,sprintf('run_%02d_sss.fif',r)]);
+% 
+%                 picks = fiff_pick_types(raw.info,false,false,false,{stimulus_channel},raw.info.bads);
+% 
+%                 [ data, ~ ] = fiff_read_raw_segment(raw,raw.first_samp,raw.last_samp,picks);
+% 
+%                 is_event = zeros(size(data));
+%                 for code = event_codes
+%                     is_event = is_event | data == code;
+%                 end
+% 
+%                 exctracted_events     = data(is_event);
+%                 exctracted_events_idx = find(is_event);
+%                 final_events      = exctracted_events_idx(1);
+%                 conditionlabels   = {event_type_mask(data(exctracted_events_idx(1)))};
+% 
+%                 for i = 1:length(exctracted_events)-1
+%                     if exctracted_events(i) ~= exctracted_events(i+1) || exctracted_events(i) == exctracted_events(i+1) && exctracted_events_idx(i+1) - exctracted_events_idx(i) > 1
+%                         final_events(end+1)    = exctracted_events_idx(i+1);
+%                         conditionlabels(end+1) = {event_type_mask(data(exctracted_events_idx(i+1)))};
+%                     end
+%                 end
+%                 trl = [(final_events' - onset*HzToMs_ratio) (final_events' + offset*HzToMs_ratio) repmat(prestimlulus_baseline, length(final_events), 1)];
+%                 save([MEG_path,sprintf('run_%02d_trldf.mat',r)], 'trl', 'conditionlabels');
+% 
+%                 clear raw picks data;
+%             end
 
             %% fill SPM batch for preproc
             inputs{n  ,1} = cellstr(fullfile(MEG_path,sprintf('run_%02d_sss.fif',r)));
-            inputs{n+1,1} = cellstr(fullfile(MEG_path,sprintf('run_%02d_trldf.mat',r)));
-            inputs{n+2,1} = cellstr(fullfile(MEG_path,sprintf('run_%02d_bdch.mat',r)));
+            inputs{n+1,1} = cellstr(fullfile(MEG_path,'Trials',sprintf('run_%02d_trldef.mat',r)));
+            inputs{n+2,1} = cellstr(fullfile(MEG_path,'bad_channels.mat'));
             n = n + 3;
         end
 
@@ -211,41 +207,44 @@ if run_preproc
 
         % return back to script folder
         cd(currFolder);
-
+        
         fclose('all');
     end
+    
+    delete(gcp('nocreate'));
 end
 
 %% original SPM inverse (Group)
 
 if run_default_inverse
+    parpool(4);
 
     % Source analysis (create forward model)
     jobfile = {fullfile(scrpth,'batch_localise_forward_model_meeg_job.m')};
 
-    for s = 1:n_old_subjects
-        if ~exist(fullfile(dir_dataset,old_subjects{s},'T1','mprage_EEG_BEM.mat'), 'file')
+    parfor s = 1:n_subjects
+%         if ~exist(fullfile(dir_dataset,subjects{s},'T1','mprage_EEG_BEM.mat'), 'file')
             inputs  = cell(5,1);
-            inputs{1} = cellstr(spm_select('FPList',fullfile(outpth,old_subjects{s}),'^apMcbdspmeeg.*\.mat$'));
-            inputs{2} = cellstr(spm_select('FPList',fullfile(dir_dataset,old_subjects{s},'T1'),'mprage.nii'));
-            f = load(spm_select('FPList',fullfile(dir_dataset,old_subjects{s},'T1'),'^mri_fids.*\.mat$'));
+            inputs{1} = cellstr(spm_select('FPList',fullfile(outpth,subjects{s}),'^apMcbdspmeeg.*\.mat$'));
+            inputs{2} = cellstr(spm_select('FPList',fullfile(dir_dataset,subjects{s},'T1'),'mprage.nii'));
+            f = load(spm_select('FPList',fullfile(dir_dataset,subjects{s},'T1'),'^mri_fids.*\.mat$'));
             inputs{3} = f.mri_fids(1,:);
             inputs{4} = f.mri_fids(2,:);
             inputs{5} = f.mri_fids(3,:);
             spm_jobman('serial', jobfile, '', inputs{:});
-        end
+%         end
     end
 
     % Do group inverse
-    f = dir(fullfile(outpth,old_subjects{1}));
-    f = regexpi({f.name},'^apMcbdspmeeg_run_01_sss_\d*\S*.gii$','match');
-    f = [f{:}];
-
-    if isempty(f)
+%     f = dir(fullfile(outpth,subjects{1}));
+%     f = regexpi({f.name},'^apMcbdspmeeg_run_01_sss_\d*\S*.gii$','match');
+%     f = [f{:}];
+% 
+%     if isempty(f)
         jobfile = {fullfile(scrpth,'batch_localise_evoked_job.m')};
-        tmp = cell(n_old_subjects,1);
-        for s = 1:n_old_subjects
-            tmp{s} = spm_select('FPList',fullfile(outpth,old_subjects{s}),'^apMcbdspmeeg.*\.mat$');
+        tmp = cell(n_subjects,1);
+        for s = 1:n_subjects
+            tmp{s} = spm_select('FPList',fullfile(outpth,subjects{s}),'^apMcbdspmeeg.*\.mat$');
         end
         inputs = cell(4,1);
         inputs{1} = cellstr(strvcat(tmp{:}));
@@ -253,7 +252,7 @@ if run_default_inverse
         inputs{3} = cellstr(strvcat(tmp{:}));
         inputs{4} = {''};  % No fMRI priors
         spm_jobman('serial', jobfile, '', inputs{:});
-    end
+%     end
 
     % Group stats of group inversions of IID and GS 
 
@@ -267,14 +266,16 @@ if run_default_inverse
             eval(sprintf('!mkdir %s',srcstatsdir{val}));
         end
 
-        inputs  = cell(n_old_subjects+1, 1);    
+        inputs  = cell(n_subjects+1, 1);    
         inputs{1} = {srcstatsdir{val}};    
-        for s = 1:n_old_subjects
-             inputs{s+1,1} = cellstr(strvcat(spm_select('FPList',fullfile(outpth,old_subjects{s}),sprintf('^apMcbdspmeeg_run_01_sss_%d.*\\.gii$',val))));   % Contrasts 1-3 assumed to be Famous, Unfamiliar, Scrambled
+        for s = 1:n_subjects
+             inputs{s+1,1} = cellstr(strvcat(spm_select('FPList',fullfile(outpth,subjects{s}),sprintf('^apMcbdspmeeg_run_01_sss_%d.*\\.gii$',val))));   % Contrasts 1-3 assumed to be Famous, Unfamiliar, Scrambled
         end
 
         spm_jobman('serial', jobfile, '', inputs{:});
     end
+    
+   delete(gcp('nocreate'));
 end
 
 %% calculate inverse
