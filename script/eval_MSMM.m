@@ -59,7 +59,7 @@ subjects = {
 
 n_subjects = length(subjects);
 
-old_subjects = subjects([6 2 3 4 11 7 8 9 10 12 13 14 15 17 18 19]);
+old_subjects = subjects([2 3 4 11 6 7 8 9 10 12 13 14 15 17 18 19]);
 n_old_subjects = length(old_subjects);
 
 % channel to extract trials
